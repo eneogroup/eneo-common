@@ -19,31 +19,72 @@ class AbstractKeycloakUser(models.Model):
         class MosalaUser(AbstractKeycloakUser):
             job_title = models.CharField(max_length=100)
 
+        # Dans eneo-account
+        class EneoAccount(AbstractKeycloakUser):
+            avatar = models.URLField(blank=True)
+
     La lazy creation se fait via get_or_create_from_token() :
         user, created = ZuryUser.get_or_create_from_token(token_payload)
     """
 
-    # Clé primaire = sub Keycloak (UUID immuable)
+    # ------------------------------------------------------------------ #
+    #  Clé primaire                                                        #
+    # ------------------------------------------------------------------ #
+
     sub = models.UUIDField(
         primary_key=True,
         editable=False,
         help_text="Identifiant universel Keycloak (sub). Jamais modifié.",
     )
 
-    # Infos synchronisées depuis le token JWT à chaque connexion
+    # ------------------------------------------------------------------ #
+    #  Claims standards JWT — synchronisés à chaque connexion             #
+    # ------------------------------------------------------------------ #
+
     email = models.EmailField(
         unique=True,
-        help_text="Email synchronisé depuis Keycloak.",
+        help_text="Synchronisé depuis le claim 'email' du token JWT.",
     )
-    first_name = models.CharField(max_length=150, blank=True)
-    last_name = models.CharField(max_length=150, blank=True)
     username = models.CharField(
         max_length=150,
         unique=True,
-        help_text="preferred_username depuis Keycloak.",
+        help_text="Synchronisé depuis le claim 'preferred_username' du token JWT.",
+    )
+    first_name = models.CharField(
+        max_length=150,
+        blank=True,
+        help_text="Synchronisé depuis le claim 'given_name' du token JWT.",
+    )
+    last_name = models.CharField(
+        max_length=150,
+        blank=True,
+        help_text="Synchronisé depuis le claim 'family_name' du token JWT.",
     )
 
-    # Métadonnées
+    # ------------------------------------------------------------------ #
+    #  Attributs custom Keycloak — configurés via mappers dans le realm   #
+    # ------------------------------------------------------------------ #
+
+    GENRE_CHOICES = [
+        ("M", "Homme"),
+        ("F", "Femme"),
+    ]
+    genre = models.CharField(
+        max_length=1,
+        choices=GENRE_CHOICES,
+        blank=True,
+        help_text="Synchronisé depuis l'attribut custom Keycloak 'gender'.",
+    )
+    tel = models.CharField(
+        max_length=20,
+        blank=True,
+        help_text="Synchronisé depuis l'attribut custom Keycloak 'phone_number'.",
+    )
+
+    # ------------------------------------------------------------------ #
+    #  Métadonnées                                                         #
+    # ------------------------------------------------------------------ #
+
     date_joined = models.DateTimeField(auto_now_add=True)
     last_seen = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
@@ -54,27 +95,32 @@ class AbstractKeycloakUser(models.Model):
     def __str__(self):
         return self.username or self.email
 
+    # ------------------------------------------------------------------ #
+    #  Lazy creation + synchronisation depuis le token JWT                #
+    # ------------------------------------------------------------------ #
+
     @classmethod
     def get_or_create_from_token(cls, payload: dict) -> tuple["AbstractKeycloakUser", bool]:
         """
         Lazy creation : crée le profil utilisateur au premier appel API,
-        et synchronise les infos de base à chaque connexion.
+        et synchronise toutes les infos depuis le token à chaque connexion.
 
         Retourne (instance, created) comme Django get_or_create.
 
-        Utilisation dans une vue ou un signal :
-            user, created = ZuryUser.get_or_create_from_token(request.user.payload)
+        Utilisation dans une vue :
+            user, created = EneoAccount.get_or_create_from_token(request.user.payload)
         """
         sub = payload.get("sub")
         if not sub:
             raise ValueError("Le payload JWT ne contient pas de 'sub'.")
 
-        # Données à synchroniser depuis le token
         defaults = {
             "email": payload.get("email", ""),
+            "username": payload.get("preferred_username", ""),
             "first_name": payload.get("given_name", ""),
             "last_name": payload.get("family_name", ""),
-            "username": payload.get("preferred_username", ""),
+            "genre": payload.get("gender", ""),
+            "tel": payload.get("phone_number", ""),
         }
 
         instance, created = cls.objects.get_or_create(
@@ -83,7 +129,6 @@ class AbstractKeycloakUser(models.Model):
         )
 
         if not created:
-            # Synchronisation des infos à chaque connexion
             updated = False
             for field, value in defaults.items():
                 if getattr(instance, field) != value and value:
@@ -94,6 +139,14 @@ class AbstractKeycloakUser(models.Model):
 
         return instance, created
 
+    # ------------------------------------------------------------------ #
+    #  Propriétés utilitaires                                              #
+    # ------------------------------------------------------------------ #
+
     @property
     def full_name(self) -> str:
         return f"{self.first_name} {self.last_name}".strip() or self.username
+
+    @property
+    def genre_display(self) -> str:
+        return dict(self.GENRE_CHOICES).get(self.genre, "")
