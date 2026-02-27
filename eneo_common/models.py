@@ -71,7 +71,7 @@ class AbstractKeycloakUser(models.Model):
         ("F", "Femme"),
     ]
     genre = models.CharField(
-        max_length=1,
+        max_length=30,
         choices=GENRE_CHOICES,
         blank=True,
         help_text="Synchronisé depuis l'attribut custom Keycloak 'gender'.",
